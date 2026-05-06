@@ -3,10 +3,20 @@
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 
-$model   = python -c 'import json; print(json.load(open("models/active.json"))["primary_model"])'
-$threads = python -c 'import json; hw=json.load(open("hardware.json")); print(hw["cpu"].get("cores_physical") or 4)'
-$gpu     = if ($env:LAB_N_GPU_LAYERS) { $env:LAB_N_GPU_LAYERS } else { '99' }
+$active = Get-Content "models/active.json" -Raw | ConvertFrom-Json
+$hw     = Get-Content "hardware.json" -Raw | ConvertFrom-Json
+
+$model   = $active.primary_model
+$threads = if ($hw.cpu.cores_physical) { [string]$hw.cpu.cores_physical } else { '4' }
+$gpu     = if ($env:LAB_N_GPU_LAYERS) { $env:LAB_N_GPU_LAYERS } elseif ($hw.gpu.backends.cpu_only) { '0' } else { '99' }
 $ctx     = if ($env:LAB_N_CTX) { $env:LAB_N_CTX } else { '2048' }
+
+if (-not $model) {
+    throw "models/active.json missing 'primary_model'. Re-run: python .\00-setup\download-model.py"
+}
+if (-not (Test-Path -LiteralPath $model)) {
+    throw "Model file not found: $model"
+}
 
 Write-Host "==> Starting llama-server" -ForegroundColor Cyan
 Write-Host "    model     : $model"

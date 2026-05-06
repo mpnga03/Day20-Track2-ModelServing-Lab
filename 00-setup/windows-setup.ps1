@@ -41,9 +41,16 @@ if ($env:LLAMA_CUDA -eq '1') {
     $env:CMAKE_ARGS = '-DGGML_CUDA=on'
     pip install --upgrade --force-reinstall --no-cache-dir llama-cpp-python
 } else {
-    Write-Host "==> Installing prebuilt llama-cpp-python (CPU)"
-    pip install --upgrade llama-cpp-python
+    Write-Host "==> Installing prebuilt llama-cpp-python (CPU wheel index)"
+    pip install --upgrade --only-binary=llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu llama-cpp-python
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "    CPU wheel install failed, falling back to PyPI source install..." -ForegroundColor Yellow
+        pip install --upgrade llama-cpp-python
+    }
 }
+
+Write-Host "==> Installing llama_cpp server dependencies"
+pip install --upgrade fastapi uvicorn starlette sse-starlette starlette-context pydantic-settings
 
 # 4. Probe + download model
 python .\00-setup\detect-hardware.py

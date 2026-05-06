@@ -13,6 +13,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import ctypes
 from pathlib import Path
 
 
@@ -61,6 +62,32 @@ def detect_cpu() -> dict:
                 elif line.startswith("NumberOfCores="):
                     val = line.split("=", 1)[1].strip()
                     info["cores_physical"] = int(val) if val.isdigit() else None
+        if info.get("model", "unknown") == "unknown":
+            rc, out = run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)",
+                ]
+            )
+            if rc == 0 and out.strip() and "Get-CimInstance" not in out:
+                info["model"] = out.strip()
+        if info.get("cores_physical") in (None, 0):
+            rc, out = run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty NumberOfCores)",
+                ]
+            )
+            val = out.strip()
+            if rc == 0 and val.isdigit() and "Get-CimInstance" not in out:
+                info["cores_physical"] = int(val)
+        if info.get("model", "unknown") == "unknown":
+            # Last-resort fallback available on most Windows installs.
+            info["model"] = os.environ.get("PROCESSOR_IDENTIFIER", "unknown")
     info.setdefault("model", "unknown")
     info.setdefault("cores_physical", info["cores_logical"])
     return info
@@ -86,6 +113,24 @@ def detect_ram_gb() -> float:
                 val = line.split("=", 1)[1].strip()
                 if val.isdigit():
                     return round(int(val) / 1024**3, 1)
+        # Fallback for systems where WMIC is unavailable/disabled.
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            return round(stat.ullTotalPhys / 1024**3, 1)
     return 0.0
 
 
@@ -194,10 +239,10 @@ def main() -> int:
     docker = detect_docker()
     rec = recommend(cpu, ram, gpu, docker)
 
-    print("─" * 60)
+    print("-" * 60)
     print(f"  Platform : {platform.system()} {platform.release()} ({platform.machine()})")
     print(f"  CPU      : {cpu['model']}")
-    print(f"             {cpu.get('cores_physical', '?')} physical · {cpu['cores_logical']} logical cores")
+    print(f"             {cpu.get('cores_physical', '?')} physical / {cpu['cores_logical']} logical cores")
     if cpu.get("avx512"):
         print("             AVX-512 available")
     elif cpu.get("avx2"):
@@ -214,15 +259,15 @@ def main() -> int:
     else:
         print("CPU only (no discrete accelerator)")
     print(f"  Docker   : {'yes' if docker['docker'] else 'no'} (compose: {'yes' if docker['compose'] else 'no'})")
-    print("─" * 60)
+    print("-" * 60)
     print("\nRecommended paths for your hardware:")
     for p in rec["recommended_paths"]:
-        print(f"  • {p}")
+        print(f"  - {p}")
     print(f"\nRecommended model: {rec['recommended_model']}")
     print(f"llama.cpp backend: {rec['llama_cpp_backend']}")
     if rec["llama_cpp_cmake_flag"]:
         print(f"  cmake flag:      {rec['llama_cpp_cmake_flag']}")
-    print("─" * 60)
+    print("-" * 60)
 
     out = {
         "cpu": cpu,
@@ -232,7 +277,7 @@ def main() -> int:
         "recommendation": rec,
     }
     Path("hardware.json").write_text(json.dumps(out, indent=2))
-    print("\nSaved hardware.json — other lab scripts will read this.")
+    print("\nSaved hardware.json - other lab scripts will read this.")
     return 0
 
 
